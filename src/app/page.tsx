@@ -17,7 +17,6 @@ import {
   ArrowLeft,
   X,
   Pill,
-  RotateCcw,
   FileSpreadsheet,
   LayoutGrid,
   UserPlus,
@@ -26,6 +25,10 @@ import {
   Lock,
   Sparkles,
   Eraser,
+  Droplets,
+  Syringe,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -36,6 +39,33 @@ const uid = () =>
   typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
     : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+/* ----------------------------------------------------------------
+   Drug form categories — used as icon filters on the ward list
+     tab    → oral tablets & capsules
+     fluid  → ampoules, vials, ampoules (injectable liquids)
+     supply → pre-filled syringes / consumables
+----------------------------------------------------------------- */
+type DrugForm = 'tab' | 'fluid' | 'supply'
+
+function categorizeDrug(name: string): DrugForm {
+  const n = name.toLowerCase()
+  if (n.includes('syringe')) return 'supply'
+  if (n.includes('tab') || n.includes('cap')) return 'tab'
+  // amp, ampoule, vial → injectable fluids
+  return 'fluid'
+}
+
+const CATEGORIES: {
+  id: 'all' | DrugForm
+  label: string
+  icon: typeof Pill
+}[] = [
+  { id: 'all', label: 'All', icon: LayoutGrid },
+  { id: 'tab', label: 'Tabs', icon: Pill },
+  { id: 'fluid', label: 'Fluids', icon: Droplets },
+  { id: 'supply', label: 'Supplies', icon: Syringe },
+]
 
 /* ----------------------------------------------------------------
    Admin / Hospital Inventory (master list — managed by admin)
@@ -86,6 +116,7 @@ interface WardDrug {
   id: string
   name: string
   custom: boolean // true if not from the admin inventory
+  form: DrugForm // tab | fluid | supply — used by the icon filter
 }
 
 interface PatientDrug {
@@ -129,7 +160,10 @@ export default function Home() {
     setWardDrugs((prev) => {
       if (prev.some((d) => d.name.toLowerCase() === inv.name.toLowerCase()))
         return prev
-      return [...prev, { id: uid(), name: inv.name, custom: false }]
+      return [
+        ...prev,
+        { id: uid(), name: inv.name, custom: false, form: categorizeDrug(inv.name) },
+      ]
     })
   }, [])
 
@@ -138,7 +172,7 @@ export default function Home() {
     if (!n) return
     setWardDrugs((prev) => {
       if (prev.some((d) => d.name.toLowerCase() === n.toLowerCase())) return prev
-      return [...prev, { id: uid(), name: n, custom: true }]
+      return [...prev, { id: uid(), name: n, custom: true, form: categorizeDrug(n) }]
     })
   }, [])
 
@@ -147,7 +181,12 @@ export default function Home() {
       const existing = new Set(prev.map((d) => d.name.toLowerCase()))
       const toAdd = INVENTORY.filter(
         (i) => !existing.has(i.name.toLowerCase()),
-      ).map((i) => ({ id: uid(), name: i.name, custom: false }))
+      ).map((i) => ({
+          id: uid(),
+          name: i.name,
+          custom: false,
+          form: categorizeDrug(i.name),
+        }))
       return [...prev, ...toAdd]
     })
     toast.success('All hospital drugs added to ward list', {
@@ -390,7 +429,7 @@ export default function Home() {
             wardDrugs={wardDrugs}
             onOpenWardDrawer={() => setWardDrawerOpen(true)}
             onAddAllInventory={addAllInventory}
-            onSaveAndNext={saveAndNext}
+            onReset={resetAll}
           />
         ) : (
           <MatrixView
@@ -402,7 +441,6 @@ export default function Home() {
             qtyFor={qtyFor}
             onBack={backToForm}
             onPrint={handlePrint}
-            onReset={resetAll}
           />
         )}
       </main>
@@ -463,7 +501,7 @@ interface EntryViewProps {
   wardDrugs: WardDrug[]
   onOpenWardDrawer: () => void
   onAddAllInventory: () => void
-  onSaveAndNext: () => void
+  onReset: () => void
 }
 
 function EntryView(props: EntryViewProps) {
@@ -480,31 +518,50 @@ function EntryView(props: EntryViewProps) {
     wardDrugs,
     onOpenWardDrawer,
     onAddAllInventory,
-    onSaveAndNext,
+    onReset,
   } = props
 
-  const [filter, setFilter] = useState('')
+  const [letterFilter, setLetterFilter] = useState('')
+  const [catFilter, setCatFilter] = useState<'all' | DrugForm>('all')
+  const [savedOpen, setSavedOpen] = useState(false)
   const wardEmpty = wardDrugs.length === 0
   const prescribedCount = currentDrugs.length
 
-  // filtered, but ALL are available when filter is cleared
+  // category + letter combine; ALL ward drugs available when both cleared
   const visibleDrugs = useMemo(() => {
-    const q = filter.trim().toLowerCase()
-    if (!q) return wardDrugs
-    return wardDrugs.filter((d) => d.name.toLowerCase().startsWith(q))
-  }, [filter, wardDrugs])
+    let list = wardDrugs
+    if (catFilter !== 'all') list = list.filter((d) => d.form === catFilter)
+    const q = letterFilter.trim().toLowerCase()
+    if (q) list = list.filter((d) => d.name.toLowerCase().startsWith(q))
+    return list
+  }, [wardDrugs, catFilter, letterFilter])
 
-  // quick-letter chips derived from ward list
+  // letters derived from the category-filtered set (stable within category)
   const letters = useMemo(() => {
     const s = new Set<string>()
-    wardDrugs.forEach((d) => {
+    let pool = wardDrugs
+    if (catFilter !== 'all') pool = pool.filter((d) => d.form === catFilter)
+    pool.forEach((d) => {
       const ch = d.name.charAt(0).toUpperCase()
       if (/[A-Z]/.test(ch)) s.add(ch)
     })
-    return [...s].sort().slice(0, 10)
+    return [...s].sort().slice(0, 12)
+  }, [wardDrugs, catFilter])
+
+  // per-category counts (for the icon badges)
+  const catCounts = useMemo(() => {
+    const c = { all: wardDrugs.length, tab: 0, fluid: 0, supply: 0 }
+    wardDrugs.forEach((d) => {
+      c[d.form] += 1
+    })
+    return c
   }, [wardDrugs])
 
-  // how many of the currently-visible drugs are prescribed
+  const totalUnits = useMemo(
+    () => savedPatients.reduce((s, p) => s + p.drugs.reduce((a, d) => a + d.quantity, 0), 0),
+    [savedPatients],
+  )
+
   const visiblePrescribed = useMemo(
     () => visibleDrugs.filter((d) => getQty(d.id) > 0).length,
     [visibleDrugs, getQty],
@@ -622,58 +679,72 @@ function EntryView(props: EntryViewProps) {
         )}
       </AnimatePresence>
 
-      {/* ---------- Filter bar ---------- */}
+      {/* ---------- Filter bar: category icons + letter chips ---------- */}
       {!wardEmpty && (
         <div className="no-print shrink-0 border-b border-slate-100 bg-slate-50/60 px-4 py-2 sm:px-6">
-          <div className="mx-auto flex w-full max-w-6xl items-center gap-2">
-            <div className="relative min-w-0 flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter ward drugs (type a letter)…"
-                className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15"
-              />
-              {filter && (
+          <div className="mx-auto flex w-full max-w-6xl items-center gap-1.5 overflow-x-auto pb-0.5">
+            {/* category icon filters */}
+            {CATEGORIES.map((cat) => {
+              const Icon = cat.icon
+              const active = catFilter === cat.id
+              const count = catCounts[cat.id]
+              return (
                 <button
-                  onClick={() => setFilter('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                  aria-label="Clear filter"
+                  key={cat.id}
+                  onClick={() => setCatFilter(active ? 'all' : cat.id)}
+                  className={`flex min-h-8 shrink-0 items-center gap-1 rounded-lg px-2.5 text-xs font-bold transition ${
+                    active
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700'
+                  }`}
+                  title={`${cat.label} (${count})`}
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <Icon className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{cat.label}</span>
+                  <span
+                    className={`rounded-full px-1 text-[10px] ${
+                      active ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    {count}
+                  </span>
                 </button>
-              )}
-            </div>
-            <span className="hidden shrink-0 text-[11px] font-medium text-slate-400 sm:block">
-              {visiblePrescribed}/{visibleDrugs.length} filled
-            </span>
-          </div>
-          {/* letter chips */}
-          {letters.length > 0 && (
-            <div className="mx-auto mt-2 flex w-full max-w-6xl gap-1.5 overflow-x-auto pb-0.5">
-              {letters.map((ch) => (
+              )
+            })}
+
+            {/* divider */}
+            {letters.length > 0 && (
+              <span className="mx-1 h-5 w-px shrink-0 bg-slate-200" aria-hidden />
+            )}
+
+            {/* letter chips */}
+            {letters.map((ch) => {
+              const active = letterFilter === ch
+              return (
                 <button
                   key={ch}
-                  onClick={() => setFilter(filter === ch ? '' : ch)}
-                  className={`min-h-7 min-w-7 shrink-0 rounded-md px-2 text-xs font-bold transition ${
-                    filter === ch
+                  onClick={() => setLetterFilter(active ? '' : ch)}
+                  className={`min-h-8 min-w-8 shrink-0 rounded-lg px-2 text-xs font-bold transition ${
+                    active
                       ? 'bg-emerald-600 text-white'
                       : 'border border-slate-200 bg-white text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700'
                   }`}
                 >
                   {ch}
                 </button>
-              ))}
-              {filter && (
-                <button
-                  onClick={() => setFilter('')}
-                  className="min-h-7 shrink-0 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-500 hover:bg-slate-100"
-                >
-                  All
-                </button>
-              )}
-            </div>
-          )}
+              )
+            })}
+          </div>
+          <div className="mx-auto mt-1 flex w-full max-w-6xl items-center justify-between">
+            <span className="text-[11px] font-medium text-slate-400">
+              {catFilter !== 'all' || letterFilter
+                ? `Showing ${visibleDrugs.length} of ${wardDrugs.length}`
+                : `${wardDrugs.length} drugs in ward list`}
+            </span>
+            <span className="text-[11px] font-medium text-slate-400">
+              {visiblePrescribed} filled
+            </span>
+          </div>
         </div>
       )}
 
@@ -698,10 +769,13 @@ function EntryView(props: EntryViewProps) {
             <div className="flex flex-col items-center justify-center py-10 text-center">
               <Search className="mb-2 h-8 w-8 text-slate-300" />
               <p className="text-sm font-medium text-slate-500">
-                No drug matches “{filter}”
+                No drug matches this filter
               </p>
               <button
-                onClick={() => setFilter('')}
+                onClick={() => {
+                  setCatFilter('all')
+                  setLetterFilter('')
+                }}
                 className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
               >
                 Show all drugs
@@ -790,46 +864,65 @@ function EntryView(props: EntryViewProps) {
         </div>
       </div>
 
-      {/* ---------- Quick save hint on mobile (above footer) ---------- */}
-      {prescribedCount > 0 && (
-        <div className="no-print shrink-0 border-t border-emerald-200 bg-emerald-50 px-4 py-2 sm:px-6">
-          <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-emerald-800">
-              {prescribedCount} drug{prescribedCount === 1 ? '' : 's'} ready
-            </span>
-            <button
-              onClick={onSaveAndNext}
-              className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
-            >
-              <UserPlus className="h-3.5 w-3.5" />
-              Save &amp; Next
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ---------- Saved patients mini-list ---------- */}
+      {/* ---------- Collapsible "Saved this round" summary ---------- */}
       {savedPatients.length > 0 && (
-        <div className="no-print shrink-0 max-h-32 overflow-y-auto border-t border-slate-200 bg-white px-4 py-2 sm:px-6">
+        <div className="no-print shrink-0 border-t border-slate-200 bg-white px-4 py-1.5 sm:px-6">
           <div className="mx-auto w-full max-w-6xl">
-            <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              Saved this round ({savedPatients.length}/{MAX_PATIENTS})
-            </p>
-            <ul className="space-y-1">
-              {savedPatients.map((p, i) => (
-                <li key={p.id} className="flex items-center gap-2 text-xs">
-                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-bold text-white">
-                    {i + 1}
-                  </span>
-                  <span className="flex-1 truncate font-medium text-slate-700">
-                    {p.name}
-                  </span>
-                  <span className="text-slate-400">
-                    {p.drugs.reduce((s, d) => s + d.quantity, 0)} units
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <button
+              onClick={() => setSavedOpen((v) => !v)}
+              className="flex w-full items-center gap-2 py-0.5 text-left"
+              aria-expanded={savedOpen}
+            >
+              {savedOpen ? (
+                <ChevronUp className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              )}
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                Saved this round
+              </span>
+              <span className="rounded-full bg-emerald-100 px-1.5 text-[10px] font-bold text-emerald-700">
+                {savedPatients.length}/{MAX_PATIENTS}
+              </span>
+              <span className="ml-auto text-[11px] font-medium text-slate-400">
+                {totalUnits} units
+              </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onReset()
+                }}
+                className="ml-1 rounded px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                title="Clear all saved patients"
+              >
+                Reset
+              </button>
+            </button>
+            <AnimatePresence initial={false}>
+              {savedOpen && (
+                <motion.ul
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className="max-h-40 space-y-1 overflow-y-auto pt-1"
+                >
+                  {savedPatients.map((p, i) => (
+                    <li key={p.id} className="flex items-center gap-2 text-xs">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-bold text-white">
+                        {i + 1}
+                      </span>
+                      <span className="flex-1 truncate font-medium text-slate-700">
+                        {p.name}
+                      </span>
+                      <span className="text-slate-400">
+                        {p.drugs.reduce((s, d) => s + d.quantity, 0)} units
+                      </span>
+                    </li>
+                  ))}
+                </motion.ul>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       )}
@@ -1109,7 +1202,6 @@ interface MatrixViewProps {
   qtyFor: (patient: Patient, drugId: string) => number
   onBack: () => void
   onPrint: () => void
-  onReset: () => void
 }
 
 function MatrixView({
@@ -1121,7 +1213,6 @@ function MatrixView({
   qtyFor,
   onBack,
   onPrint,
-  onReset,
 }: MatrixViewProps) {
   const today = useMemo(() => {
     const d = new Date()
@@ -1153,13 +1244,6 @@ function MatrixView({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={onReset}
-              className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-600 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 active:scale-95"
-            >
-              <RotateCcw className="h-4 w-4" />
-              <span className="hidden sm:inline">Clear All</span>
-            </button>
             <button
               onClick={onPrint}
               className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white shadow-md shadow-emerald-600/30 transition hover:bg-emerald-700 active:scale-95"
