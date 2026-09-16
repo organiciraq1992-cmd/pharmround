@@ -1,5 +1,6 @@
 /* Seed the hospital Inventory with the 24 default drugs.
    Run with: bun prisma/seed.ts  (or via `bun run db:seed`) */
+import 'dotenv/config'
 import { PrismaClient } from '@prisma/client'
 
 const db = new PrismaClient()
