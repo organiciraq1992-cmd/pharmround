@@ -17,12 +17,7 @@ import {
   ArrowLeft,
   X,
   Pill,
-  ClipboardList,
   RotateCcw,
-  ChevronRight,
-  Crosshair,
-  Check,
-  AlertCircle,
   FileSpreadsheet,
   LayoutGrid,
   UserPlus,
@@ -30,6 +25,7 @@ import {
   Package,
   Lock,
   Sparkles,
+  Eraser,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -104,25 +100,6 @@ interface Patient {
   createdAt: number
 }
 
-/* ----------------------------------------------------------------
-   Small helper - highlight matched portion of a drug name
------------------------------------------------------------------ */
-function highlightMatch(name: string, query: string) {
-  const q = query.trim().toLowerCase()
-  if (!q) return name
-  const idx = name.toLowerCase().indexOf(q)
-  if (idx === -1) return name
-  return (
-    <>
-      {name.slice(0, idx)}
-      <mark className="rounded bg-amber-200 px-0.5 font-semibold text-emerald-900">
-        {name.slice(idx, idx + q.length)}
-      </mark>
-      {name.slice(idx + q.length)}
-    </>
-  )
-}
-
 /* ================================================================ */
 /*                              APP                                  */
 /* ================================================================ */
@@ -138,14 +115,7 @@ export default function Home() {
   const [currentName, setCurrentName] = useState('')
   const [currentDrugs, setCurrentDrugs] = useState<PatientDrug[]>([])
 
-  // Search
-  const [searchQuery, setSearchQuery] = useState('')
-  const [showSuggestions, setShowSuggestions] = useState(false)
-  const [activeIndex, setActiveIndex] = useState(-1)
-
   const nameRef = useRef<HTMLInputElement>(null)
-  const searchRef = useRef<HTMLInputElement>(null)
-  const suggestionsWrapRef = useRef<HTMLDivElement>(null)
 
   /* --------------------------- ward list actions --------------------------- */
   const wardNameSet = useMemo(
@@ -153,18 +123,15 @@ export default function Home() {
     [wardDrugs],
   )
 
-  const addToWardFromInventory = useCallback(
-    (invId: string) => {
-      const inv = INVENTORY.find((i) => i.id === invId)
-      if (!inv) return
-      setWardDrugs((prev) => {
-        if (prev.some((d) => d.name.toLowerCase() === inv.name.toLowerCase()))
-          return prev
-        return [...prev, { id: uid(), name: inv.name, custom: false }]
-      })
-    },
-    [],
-  )
+  const addToWardFromInventory = useCallback((invId: string) => {
+    const inv = INVENTORY.find((i) => i.id === invId)
+    if (!inv) return
+    setWardDrugs((prev) => {
+      if (prev.some((d) => d.name.toLowerCase() === inv.name.toLowerCase()))
+        return prev
+      return [...prev, { id: uid(), name: inv.name, custom: false }]
+    })
+  }, [])
 
   const addCustomToWard = useCallback((name: string) => {
     const n = name.trim()
@@ -208,83 +175,33 @@ export default function Home() {
     [isWardDrugInUse],
   )
 
-  /* --------------------------- patient drug actions --------------------------- */
-  const addDrugToPatient = useCallback(
-    (drugId: string) => {
-      const wd = wardDrugs.find((d) => d.id === drugId)
-      if (!wd) return
-      setCurrentDrugs((prev) => {
-        const existing = prev.find((d) => d.drugId === drugId)
-        if (existing)
-          return prev.map((d) =>
-            d.drugId === drugId ? { ...d, quantity: d.quantity + 1 } : d,
-          )
-        return [...prev, { drugId, quantity: 1 }]
-      })
-      setSearchQuery('')
-      setShowSuggestions(false)
-      setActiveIndex(-1)
-      toast.success(`${wd.name} added`, { duration: 1400 })
-    },
-    [wardDrugs],
+  /* --------------------------- patient column actions --------------------------- */
+  // currentDrugs is a SPARSE list of { drugId, quantity } for qty > 0 only.
+  const getQty = useCallback(
+    (drugId: string) =>
+      currentDrugs.find((d) => d.drugId === drugId)?.quantity ?? 0,
+    [currentDrugs],
   )
 
-  const quickAddToWardAndPatient = useCallback(
-    (name: string) => {
-      const n = name.trim()
-      if (!n) return
-      // add to ward list (avoid dup by name)
-      const existing = wardDrugs.find(
-        (d) => d.name.toLowerCase() === n.toLowerCase(),
-      )
-      const drugId = existing ? existing.id : uid()
-      if (!existing) {
-        setWardDrugs((prev) => [
-          ...prev,
-          { id: drugId, name: n, custom: true },
-        ])
-      }
-      // add to patient
-      setCurrentDrugs((prev) => {
-        const ex = prev.find((d) => d.drugId === drugId)
-        if (ex)
-          return prev.map((d) =>
-            d.drugId === drugId ? { ...d, quantity: d.quantity + 1 } : d,
-          )
-        return [...prev, { drugId, quantity: 1 }]
-      })
-      setSearchQuery('')
-      setShowSuggestions(false)
-      setActiveIndex(-1)
-      toast.success(`Added "${n}" to ward list & patient`, { duration: 1600 })
+  const setQty = useCallback((drugId: string, value: number) => {
+    const v = Math.max(0, Math.floor(Number.isNaN(value) ? 0 : value))
+    setCurrentDrugs((prev) => {
+      const filtered = prev.filter((d) => d.drugId !== drugId)
+      return v > 0 ? [...filtered, { drugId, quantity: v }] : filtered
+    })
+  }, [])
+
+  const bumpQty = useCallback(
+    (drugId: string, delta: number) => {
+      const next = (getQty(drugId) || 0) + delta
+      setQty(drugId, next)
     },
-    [wardDrugs],
+    [getQty, setQty],
   )
 
-  const updateQuantity = (drugId: string, delta: number) => {
-    setCurrentDrugs((prev) =>
-      prev
-        .map((d) =>
-          d.drugId === drugId ? { ...d, quantity: d.quantity + delta } : d,
-        )
-        .filter((d) => d.quantity > 0),
-    )
-  }
-
-  const setQuantity = (drugId: string, value: number) => {
-    if (Number.isNaN(value) || value < 0) return
-    setCurrentDrugs((prev) =>
-      prev
-        .map((d) =>
-          d.drugId === drugId ? { ...d, quantity: value } : d,
-        )
-        .filter((d) => d.quantity > 0),
-    )
-  }
-
-  const removeDrug = (drugId: string) => {
-    setCurrentDrugs((prev) => prev.filter((d) => d.drugId !== drugId))
-  }
+  const clearColumn = useCallback(() => {
+    setCurrentDrugs([])
+  }, [])
 
   /* --------------------------- save & next --------------------------- */
   const saveAndNext = () => {
@@ -296,10 +213,9 @@ export default function Home() {
       return
     }
     if (currentDrugs.length === 0) {
-      toast.error('Add at least one drug before saving', {
-        description: 'Search a drug by its first letter.',
+      toast.error('Enter a quantity for at least one drug', {
+        description: 'Type the number next to a drug in the list.',
       })
-      searchRef.current?.focus()
       return
     }
     if (patients.length >= MAX_PATIENTS) {
@@ -315,10 +231,8 @@ export default function Home() {
     setPatients((prev) => [...prev, patient])
     setCurrentName('')
     setCurrentDrugs([])
-    setSearchQuery('')
-    setShowSuggestions(false)
     toast.success(`Patient ${patients.length + 1} saved`, {
-      description: `${patient.drugs.length} drug(s) recorded.`,
+      description: `${patient.drugs.length} drug(s) recorded — column cleared.`,
     })
     setTimeout(() => nameRef.current?.focus(), 50)
   }
@@ -359,64 +273,11 @@ export default function Home() {
     setPatients([])
     setCurrentName('')
     setCurrentDrugs([])
-    setSearchQuery('')
-    setShowSuggestions(false)
     setPhase('entry')
     toast.success('All records cleared')
   }
 
   const handlePrint = () => window.print()
-
-  /* --------------------------- search keyboard nav --------------------------- */
-  const suggestions = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase()
-    if (!q) return wardDrugs
-    return wardDrugs.filter((d) => d.name.toLowerCase().startsWith(q))
-  }, [searchQuery, wardDrugs])
-
-  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'ArrowDown') {
-      if (suggestions.length === 0) return
-      e.preventDefault()
-      setShowSuggestions(true)
-      setActiveIndex((prev) =>
-        prev < 0 ? 0 : (prev + 1) % suggestions.length,
-      )
-    } else if (e.key === 'ArrowUp') {
-      if (suggestions.length === 0) return
-      e.preventDefault()
-      setActiveIndex((prev) =>
-        prev <= 0 ? suggestions.length - 1 : prev - 1,
-      )
-    } else if (e.key === 'Enter') {
-      e.preventDefault()
-      if (suggestions.length > 0) {
-        const idx = activeIndex >= 0 ? activeIndex : 0
-        addDrugToPatient(suggestions[idx].id)
-      } else if (searchQuery.trim()) {
-        quickAddToWardAndPatient(searchQuery.trim())
-      }
-    } else if (e.key === 'Escape') {
-      setShowSuggestions(false)
-      setActiveIndex(-1)
-    }
-  }
-
-  /* close suggestions on outside click */
-  useEffect(() => {
-    if (!showSuggestions) return
-    const handler = (e: MouseEvent) => {
-      if (
-        suggestionsWrapRef.current &&
-        !suggestionsWrapRef.current.contains(e.target as Node)
-      ) {
-        setShowSuggestions(false)
-        setActiveIndex(-1)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showSuggestions])
 
   /* --------------------------- matrix derived data --------------------------- */
   // Only drugs actually used by >=1 patient become columns.
@@ -520,25 +381,16 @@ export default function Home() {
             currentName={currentName}
             setCurrentName={setCurrentName}
             currentDrugs={currentDrugs}
-            searchQuery={searchQuery}
-            setSearchQuery={setSearchQuery}
-            showSuggestions={showSuggestions}
-            setShowSuggestions={setShowSuggestions}
-            activeIndex={activeIndex}
-            suggestions={suggestions}
-            addDrugToPatient={addDrugToPatient}
-            quickAddToWardAndPatient={quickAddToWardAndPatient}
-            updateQuantity={updateQuantity}
-            setQuantity={setQuantity}
-            removeDrug={removeDrug}
-            handleSearchKeyDown={handleSearchKeyDown}
+            getQty={getQty}
+            setQty={setQty}
+            bumpQty={bumpQty}
+            clearColumn={clearColumn}
             nameRef={nameRef}
-            searchRef={searchRef}
-            suggestionsWrapRef={suggestionsWrapRef}
             savedPatients={patients}
             wardDrugs={wardDrugs}
             onOpenWardDrawer={() => setWardDrawerOpen(true)}
             onAddAllInventory={addAllInventory}
+            onSaveAndNext={saveAndNext}
           />
         ) : (
           <MatrixView
@@ -596,30 +448,22 @@ export default function Home() {
 
 /* ================================================================== */
 /*                       PHASE 1 - ENTRY VIEW                          */
+/*   Sticky, scrollable ward list + single editable patient column    */
 /* ================================================================== */
 interface EntryViewProps {
   currentName: string
   setCurrentName: (v: string) => void
   currentDrugs: PatientDrug[]
-  searchQuery: string
-  setSearchQuery: (v: string) => void
-  showSuggestions: boolean
-  setShowSuggestions: (v: boolean) => void
-  activeIndex: number
-  suggestions: WardDrug[]
-  addDrugToPatient: (drugId: string) => void
-  quickAddToWardAndPatient: (name: string) => void
-  updateQuantity: (drugId: string, delta: number) => void
-  setQuantity: (drugId: string, value: number) => void
-  removeDrug: (drugId: string) => void
-  handleSearchKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
+  getQty: (drugId: string) => number
+  setQty: (drugId: string, value: number) => void
+  bumpQty: (drugId: string, delta: number) => void
+  clearColumn: () => void
   nameRef: React.RefObject<HTMLInputElement | null>
-  searchRef: React.RefObject<HTMLInputElement | null>
-  suggestionsWrapRef: React.RefObject<HTMLDivElement | null>
   savedPatients: Patient[]
   wardDrugs: WardDrug[]
   onOpenWardDrawer: () => void
   onAddAllInventory: () => void
+  onSaveAndNext: () => void
 }
 
 function EntryView(props: EntryViewProps) {
@@ -627,425 +471,314 @@ function EntryView(props: EntryViewProps) {
     currentName,
     setCurrentName,
     currentDrugs,
-    searchQuery,
-    setSearchQuery,
-    showSuggestions,
-    setShowSuggestions,
-    activeIndex,
-    suggestions,
-    addDrugToPatient,
-    quickAddToWardAndPatient,
-    updateQuantity,
-    setQuantity,
-    removeDrug,
-    handleSearchKeyDown,
+    getQty,
+    setQty,
+    bumpQty,
+    clearColumn,
     nameRef,
-    searchRef,
-    suggestionsWrapRef,
     savedPatients,
     wardDrugs,
     onOpenWardDrawer,
     onAddAllInventory,
+    onSaveAndNext,
   } = props
 
+  const [filter, setFilter] = useState('')
   const wardEmpty = wardDrugs.length === 0
+  const prescribedCount = currentDrugs.length
 
-  // quick-letter chips from ward list
+  // filtered, but ALL are available when filter is cleared
+  const visibleDrugs = useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (!q) return wardDrugs
+    return wardDrugs.filter((d) => d.name.toLowerCase().startsWith(q))
+  }, [filter, wardDrugs])
+
+  // quick-letter chips derived from ward list
   const letters = useMemo(() => {
     const s = new Set<string>()
     wardDrugs.forEach((d) => {
       const ch = d.name.charAt(0).toUpperCase()
       if (/[A-Z]/.test(ch)) s.add(ch)
     })
-    return [...s].sort().slice(0, 8)
+    return [...s].sort().slice(0, 10)
   }, [wardDrugs])
 
+  // how many of the currently-visible drugs are prescribed
+  const visiblePrescribed = useMemo(
+    () => visibleDrugs.filter((d) => getQty(d.id) > 0).length,
+    [visibleDrugs, getQty],
+  )
+
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-6xl px-4 pb-6 pt-4 sm:px-6 sm:pt-6">
-        {/* Patient name card */}
-        <motion.section
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.25 }}
-          className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
-        >
-          <div className="mb-2 flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
-              <Crosshair className="h-4 w-4" />
-            </span>
-            <label htmlFor="patient-name" className="text-sm font-semibold text-slate-700">
-              Patient Name
-            </label>
-            <span className="ml-auto text-[11px] font-medium text-slate-400">
-              Patient {savedPatients.length + 1}
-            </span>
+    <div className="flex h-full flex-col">
+      {/* ---------- Patient name bar ---------- */}
+      <div className="shrink-0 bg-white px-4 pb-3 pt-3 shadow-sm sm:px-6 sm:pt-4">
+        <div className="mx-auto flex w-full max-w-6xl items-center gap-2">
+          <div className="relative flex-1">
+            <input
+              ref={nameRef}
+              value={currentName}
+              onChange={(e) => setCurrentName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  // focus the first qty input
+                  const first = document.querySelector<HTMLInputElement>(
+                    '[data-qty-input="1"]',
+                  )
+                  first?.focus()
+                }
+              }}
+              placeholder="Patient name  ·  e.g. John Doe / Bed 14"
+              autoComplete="off"
+              className="w-full rounded-xl border-2 border-slate-200 bg-slate-50 px-4 py-3 text-base font-semibold text-slate-800 outline-none transition placeholder:font-normal placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10 sm:text-lg"
+            />
           </div>
-          <input
-            id="patient-name"
-            ref={nameRef}
-            value={currentName}
-            onChange={(e) => setCurrentName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                searchRef.current?.focus()
-              }
-            }}
-            placeholder="e.g.  John Doe  /  Bed 14"
-            autoComplete="off"
-            className="w-full rounded-xl border-2 border-slate-200 bg-slate-50 px-4 py-4 text-lg font-semibold text-slate-800 outline-none transition placeholder:font-normal placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10 sm:text-xl"
-          />
-        </motion.section>
-
-        {/* Ward list status bar */}
-        <motion.section
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.25, delay: 0.03 }}
-          className="mt-3 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2.5 sm:mt-4"
-        >
-          <ListPlus className="h-4 w-4 shrink-0 text-emerald-700" />
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-emerald-800">
-              Ward Side List
-            </p>
-            <p className="truncate text-[11px] text-emerald-700/80">
-              {wardEmpty
-                ? 'No drugs yet — build your ward list to enable fast entry'
-                : `${wardDrugs.length} drug${wardDrugs.length === 1 ? '' : 's'} ready for search`}
-            </p>
-          </div>
-          <button
-            onClick={onOpenWardDrawer}
-            className="flex items-center gap-1 rounded-lg border border-emerald-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 active:scale-95"
-          >
-            {wardEmpty ? 'Build list' : 'Manage'}
-          </button>
-        </motion.section>
-
-        {/* Ward setup CTA when empty */}
-        <AnimatePresence>
-          {wardEmpty && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="overflow-hidden"
+          <div className="flex shrink-0 items-center gap-1.5">
+            {prescribedCount > 0 && (
+              <button
+                onClick={clearColumn}
+                className="flex h-11 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-500 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 active:scale-95"
+                title="Clear all quantities in this column"
+              >
+                <Eraser className="h-4 w-4" />
+                <span className="hidden sm:inline">Clear</span>
+              </button>
+            )}
+            <button
+              onClick={onOpenWardDrawer}
+              className="flex h-11 items-center gap-1.5 rounded-xl border border-emerald-300 bg-emerald-50 px-3 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100 active:scale-95"
             >
-              <div className="mt-3 rounded-2xl border-2 border-dashed border-emerald-300 bg-white p-4 sm:p-5">
-                <div className="flex items-start gap-3">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
-                    <Sparkles className="h-5 w-5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-bold text-slate-800">
-                      Set up your ward drug list
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Each ward uses a specific set of drugs. Add the ones your
-                      ward commonly uses so patient entry is fast.
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button
-                        onClick={onAddAllInventory}
-                        className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
-                      >
-                        <Package className="h-3.5 w-3.5" />
-                        Add all {INVENTORY.length} hospital drugs
-                      </button>
-                      <button
-                        onClick={onOpenWardDrawer}
-                        className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 active:scale-95"
-                      >
-                        <ListPlus className="h-3.5 w-3.5" />
-                        Choose manually
-                      </button>
-                    </div>
+              <ListPlus className="h-4 w-4" />
+              <span className="hidden sm:inline">Ward list</span>
+              <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                {wardDrugs.length}
+              </span>
+            </button>
+          </div>
+        </div>
+        {/* prescribed chips line */}
+        <div className="mx-auto mt-2 flex w-full max-w-6xl items-center gap-2">
+          <span className="text-[11px] font-medium text-slate-400">
+            Patient {savedPatients.length + 1}
+          </span>
+          <span className="text-slate-300">·</span>
+          <span className="text-[11px] font-medium text-slate-400">
+            {prescribedCount > 0 ? (
+              <span className="font-bold text-emerald-700">
+                {prescribedCount} drug{prescribedCount === 1 ? '' : 's'} prescribed
+              </span>
+            ) : (
+              'Type a number next to each prescribed drug'
+            )}
+          </span>
+        </div>
+      </div>
+
+      {/* ---------- Ward setup CTA when empty ---------- */}
+      <AnimatePresence>
+        {wardEmpty && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="shrink-0 overflow-hidden px-4 pt-3 sm:px-6"
+          >
+            <div className="mx-auto w-full max-w-6xl rounded-2xl border-2 border-dashed border-emerald-300 bg-white p-4 sm:p-5">
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+                  <Sparkles className="h-5 w-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-800">
+                    Set up your ward drug list
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Each ward uses a specific set of drugs. Add the ones your
+                    ward commonly uses — they become the rows of this patient
+                    column.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      onClick={onAddAllInventory}
+                      className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
+                    >
+                      <Package className="h-3.5 w-3.5" />
+                      Add all {INVENTORY.length} hospital drugs
+                    </button>
+                    <button
+                      onClick={onOpenWardDrawer}
+                      className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 active:scale-95"
+                    >
+                      <ListPlus className="h-3.5 w-3.5" />
+                      Choose manually
+                    </button>
                   </div>
                 </div>
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-        {/* Drug search card */}
-        <motion.section
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.25, delay: 0.05 }}
-          className="relative mt-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:mt-4 sm:p-5"
-        >
-          <div className="mb-2 flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
-              <Search className="h-4 w-4" />
-            </span>
-            <label htmlFor="drug-search" className="text-sm font-semibold text-slate-700">
-              Smart Drug Search
-            </label>
-            <button
-              onClick={onOpenWardDrawer}
-              className="ml-auto flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200 transition hover:bg-emerald-100"
-            >
-              <ListPlus className="h-3 w-3" />
-              {wardDrugs.length} in list
-            </button>
-          </div>
-
-          <div ref={suggestionsWrapRef} className="relative">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+      {/* ---------- Filter bar ---------- */}
+      {!wardEmpty && (
+        <div className="no-print shrink-0 border-b border-slate-100 bg-slate-50/60 px-4 py-2 sm:px-6">
+          <div className="mx-auto flex w-full max-w-6xl items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
-                id="drug-search"
-                ref={searchRef}
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value)
-                  setShowSuggestions(true)
-                  setActiveIndex(-1)
-                }}
-                onKeyDown={handleSearchKeyDown}
-                onFocus={() => setShowSuggestions(true)}
-                placeholder={
-                  wardEmpty
-                    ? 'Build your ward list first…'
-                    : 'Type first letter, e.g. "P"…'
-                }
-                autoComplete="off"
-                autoCorrect="off"
-                spellCheck={false}
-                disabled={wardEmpty}
-                className="w-full rounded-xl border-2 border-slate-200 bg-slate-50 py-3.5 pl-11 pr-11 text-base text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter ward drugs (type a letter)…"
+                className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15"
               />
-              {searchQuery && (
+              {filter && (
                 <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('')
-                    setShowSuggestions(false)
-                    searchRef.current?.focus()
-                  }}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                  aria-label="Clear search"
+                  onClick={() => setFilter('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                  aria-label="Clear filter"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
-
-            {/* Suggestions dropdown */}
-            <AnimatePresence>
-              {showSuggestions && !wardEmpty && (
-                <motion.div
-                  initial={{ opacity: 0, y: -4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.15 }}
-                  className="absolute left-0 right-0 top-full z-20 mt-2 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl ring-1 ring-black/5"
-                >
-                  {suggestions.length === 0 ? (
-                    <div className="px-3 py-3">
-                      <button
-                        type="button"
-                        onClick={() => quickAddToWardAndPatient(searchQuery.trim())}
-                        className="flex w-full items-center gap-3 rounded-lg bg-amber-50 px-3 py-2.5 text-left text-sm ring-1 ring-amber-200 transition hover:bg-amber-100"
-                      >
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-amber-500 text-white">
-                          <Plus className="h-4 w-4" />
-                        </span>
-                        <span className="flex-1 text-slate-800">
-                          Add{' '}
-                          <span className="font-bold">“{searchQuery.trim()}”</span>{' '}
-                          to ward list &amp; patient
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowSuggestions(false)
-                          onOpenWardDrawer()
-                        }}
-                        className="mt-1.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-emerald-700 transition hover:bg-emerald-50"
-                      >
-                        <ListPlus className="h-3.5 w-3.5" />
-                        Open ward list manager
-                      </button>
-                    </div>
-                  ) : (
-                    <ul className="py-1">
-                      {suggestions.map((s, i) => {
-                        const alreadyAdded = currentDrugs.some(
-                          (d) => d.drugId === s.id,
-                        )
-                        return (
-                          <li key={s.id}>
-                            <button
-                              type="button"
-                              onClick={() => addDrugToPatient(s.id)}
-                              onMouseEnter={() => setActiveIndex(i)}
-                              className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition ${
-                                activeIndex === i ? 'bg-emerald-50' : 'hover:bg-slate-50'
-                              }`}
-                            >
-                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-600/10 text-xs font-bold text-emerald-700">
-                                {s.name.charAt(0).toUpperCase()}
-                              </span>
-                              <span className="flex-1 text-slate-800">
-                                {highlightMatch(s.name, searchQuery)}
-                              </span>
-                              {s.custom && (
-                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
-                                  custom
-                                </span>
-                              )}
-                              {alreadyAdded && (
-                                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                                  ADDED
-                                </span>
-                              )}
-                              <Plus className="h-4 w-4 text-emerald-600" />
-                            </button>
-                          </li>
-                        )
-                      })}
-                      {searchQuery.trim() && (
-                        <li className="border-t border-slate-100">
-                          <button
-                            type="button"
-                            onClick={() => quickAddToWardAndPatient(searchQuery.trim())}
-                            className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-amber-700 transition hover:bg-amber-50"
-                          >
-                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-amber-500 text-white">
-                              <Plus className="h-4 w-4" />
-                            </span>
-                            <span className="flex-1">
-                              Add{' '}
-                              <span className="font-bold">“{searchQuery.trim()}”</span>{' '}
-                              as new ward drug
-                            </span>
-                          </button>
-                        </li>
-                      )}
-                    </ul>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <span className="hidden shrink-0 text-[11px] font-medium text-slate-400 sm:block">
+              {visiblePrescribed}/{visibleDrugs.length} filled
+            </span>
           </div>
-
-          {/* quick-letter chips */}
-          {!wardEmpty && letters.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5">
+          {/* letter chips */}
+          {letters.length > 0 && (
+            <div className="mx-auto mt-2 flex w-full max-w-6xl gap-1.5 overflow-x-auto pb-0.5">
               {letters.map((ch) => (
                 <button
                   key={ch}
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery(ch)
-                    setShowSuggestions(true)
-                    setActiveIndex(-1)
-                    searchRef.current?.focus()
-                  }}
-                  className="min-h-9 min-w-9 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-sm font-semibold text-slate-600 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700"
+                  onClick={() => setFilter(filter === ch ? '' : ch)}
+                  className={`min-h-7 min-w-7 shrink-0 rounded-md px-2 text-xs font-bold transition ${
+                    filter === ch
+                      ? 'bg-emerald-600 text-white'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700'
+                  }`}
                 >
                   {ch}
                 </button>
               ))}
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery('')
-                  setShowSuggestions(true)
-                  searchRef.current?.focus()
-                }}
-                className="min-h-9 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-sm font-semibold text-slate-500 transition hover:bg-slate-100"
-              >
-                All
-              </button>
+              {filter && (
+                <button
+                  onClick={() => setFilter('')}
+                  className="min-h-7 shrink-0 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-500 hover:bg-slate-100"
+                >
+                  All
+                </button>
+              )}
             </div>
           )}
-        </motion.section>
+        </div>
+      )}
 
-        {/* Prescribed list */}
-        <section className="mt-3 sm:mt-4">
-          <div className="mb-2 flex items-center gap-2 px-1">
-            <ClipboardList className="h-4 w-4 text-slate-500" />
-            <h2 className="text-sm font-semibold text-slate-700">
-              Prescribed for this patient
-            </h2>
-            <span className="ml-auto rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-700">
-              {currentDrugs.length} drug{currentDrugs.length === 1 ? '' : 's'}
-            </span>
+      {/* ---------- Column header ---------- */}
+      {!wardEmpty && visibleDrugs.length > 0 && (
+        <div className="no-print sticky top-0 z-10 shrink-0 border-y border-slate-200 bg-slate-100/95 px-4 py-1.5 backdrop-blur sm:px-6">
+          <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+            <span>Drug · Ward list</span>
+            <span className="text-emerald-700">This patient (qty)</span>
           </div>
+        </div>
+      )}
 
-          {currentDrugs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-white/60 px-4 py-10 text-center">
-              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
-                <Pill className="h-6 w-6 text-slate-400" />
-              </div>
-              <p className="text-sm font-medium text-slate-500">No drugs added yet</p>
-              <p className="mt-1 text-xs text-slate-400">
-                Search a drug above to add it to this patient.
+      {/* ---------- Scrollable ward list + single patient column ---------- */}
+      <div className="no-print min-h-0 flex-1 overflow-y-auto px-4 py-2 sm:px-6">
+        <div className="mx-auto w-full max-w-6xl">
+          {wardEmpty ? (
+            <p className="py-8 text-center text-sm text-slate-400">
+              Add ward drugs above to start filling patient quantities.
+            </p>
+          ) : visibleDrugs.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <Search className="mb-2 h-8 w-8 text-slate-300" />
+              <p className="text-sm font-medium text-slate-500">
+                No drug matches “{filter}”
               </p>
+              <button
+                onClick={() => setFilter('')}
+                className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Show all drugs
+              </button>
             </div>
           ) : (
-            <ul className="space-y-2">
+            <ul className="space-y-1.5 pb-4">
               <AnimatePresence initial={false}>
-                {currentDrugs.map((d) => {
-                  const wd = wardDrugs.find((w) => w.id === d.drugId)
-                  const name = wd?.name ?? 'Unknown drug'
+                {visibleDrugs.map((drug) => {
+                  const q = getQty(drug.id)
+                  const filled = q > 0
                   return (
                     <motion.li
-                      key={d.drugId}
+                      key={drug.id}
                       layout
-                      initial={{ opacity: 0, x: -12 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: 12 }}
-                      transition={{ duration: 0.18 }}
-                      className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className={`flex items-center gap-2.5 rounded-xl border bg-white p-2 transition ${
+                        filled
+                          ? 'border-emerald-300 bg-emerald-50/50 ring-1 ring-emerald-200'
+                          : 'border-slate-200'
+                      }`}
                     >
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-xs font-bold text-white">
-                        {name.charAt(0).toUpperCase()}
+                      <span
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold ${
+                          filled
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {drug.name.charAt(0).toUpperCase()}
                       </span>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-slate-800">{name}</p>
-                        <p className="text-[11px] text-slate-400">
-                          {wd?.custom ? 'Custom ward drug' : 'From ward list'} · Qty
+                        <p className="truncate text-sm font-semibold text-slate-800">
+                          {drug.name}
                         </p>
+                        {drug.custom && (
+                          <span className="text-[10px] font-medium text-slate-400">
+                            Custom ward drug
+                          </span>
+                        )}
                       </div>
 
-                      <div className="flex items-center gap-1.5">
+                      {/* single-patient quantity column */}
+                      <div className="flex shrink-0 items-center gap-1">
                         <button
                           type="button"
-                          onClick={() => updateQuantity(d.drugId, -1)}
+                          onClick={() => bumpQty(drug.id, -1)}
                           className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 active:scale-90"
-                          aria-label="Decrease quantity"
+                          aria-label={`Decrease ${drug.name}`}
                         >
                           <Minus className="h-4 w-4" />
                         </button>
                         <input
-                          value={d.quantity}
+                          data-qty-input="1"
+                          value={q > 0 ? String(q) : ''}
                           onChange={(e) =>
-                            setQuantity(d.drugId, parseInt(e.target.value, 10))
+                            setQty(drug.id, parseInt(e.target.value, 10))
                           }
+                          onFocus={(e) => e.currentTarget.select()}
                           inputMode="numeric"
-                          className="h-9 w-12 rounded-lg border border-slate-200 bg-white text-center text-base font-bold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                          placeholder="0"
+                          className={`h-9 w-12 rounded-lg border text-center text-base font-bold outline-none transition focus:ring-2 ${
+                            filled
+                              ? 'border-emerald-500 bg-white text-emerald-700 focus:ring-emerald-500/25'
+                              : 'border-slate-200 bg-slate-50 text-slate-700 focus:border-emerald-500 focus:bg-white focus:ring-emerald-500/20'
+                          }`}
+                          aria-label={`Quantity for ${drug.name}`}
                         />
                         <button
                           type="button"
-                          onClick={() => updateQuantity(d.drugId, 1)}
+                          onClick={() => bumpQty(drug.id, 1)}
                           className="flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100 active:scale-90"
-                          aria-label="Increase quantity"
+                          aria-label={`Increase ${drug.name}`}
                         >
                           <Plus className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeDrug(d.drugId)}
-                          className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-400 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 active:scale-90"
-                          aria-label="Remove drug"
-                        >
-                          <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
                     </motion.li>
@@ -1054,39 +787,52 @@ function EntryView(props: EntryViewProps) {
               </AnimatePresence>
             </ul>
           )}
-        </section>
-
-        {/* saved patients mini-list */}
-        {savedPatients.length > 0 && (
-          <section className="mt-5">
-            <div className="mb-2 flex items-center gap-2 px-1">
-              <Check className="h-4 w-4 text-emerald-600" />
-              <h2 className="text-sm font-semibold text-slate-700">Saved this round</h2>
-              <span className="ml-auto text-xs font-medium text-slate-400">
-                {savedPatients.length} / {MAX_PATIENTS}
-              </span>
-            </div>
-            <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-              <ul className="divide-y divide-slate-100">
-                {savedPatients.map((p, i) => (
-                  <li key={p.id} className="flex items-center gap-3 px-3 py-2.5">
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold text-white">
-                      {i + 1}
-                    </span>
-                    <span className="flex-1 truncate text-sm font-medium text-slate-700">
-                      {p.name}
-                    </span>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
-                      {p.drugs.reduce((s, d) => s + d.quantity, 0)} units
-                    </span>
-                    <ChevronRight className="h-4 w-4 text-slate-300" />
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </section>
-        )}
+        </div>
       </div>
+
+      {/* ---------- Quick save hint on mobile (above footer) ---------- */}
+      {prescribedCount > 0 && (
+        <div className="no-print shrink-0 border-t border-emerald-200 bg-emerald-50 px-4 py-2 sm:px-6">
+          <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-emerald-800">
+              {prescribedCount} drug{prescribedCount === 1 ? '' : 's'} ready
+            </span>
+            <button
+              onClick={onSaveAndNext}
+              className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              Save &amp; Next
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Saved patients mini-list ---------- */}
+      {savedPatients.length > 0 && (
+        <div className="no-print shrink-0 max-h-32 overflow-y-auto border-t border-slate-200 bg-white px-4 py-2 sm:px-6">
+          <div className="mx-auto w-full max-w-6xl">
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              Saved this round ({savedPatients.length}/{MAX_PATIENTS})
+            </p>
+            <ul className="space-y-1">
+              {savedPatients.map((p, i) => (
+                <li key={p.id} className="flex items-center gap-2 text-xs">
+                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-bold text-white">
+                    {i + 1}
+                  </span>
+                  <span className="flex-1 truncate font-medium text-slate-700">
+                    {p.name}
+                  </span>
+                  <span className="text-slate-400">
+                    {p.drugs.reduce((s, d) => s + d.quantity, 0)} units
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1131,7 +877,8 @@ function WardDrawer({
     })
   }, [invQuery, wardNameSet])
 
-  const remainingInventory = INVENTORY.length - wardDrugs.filter((d) => !d.custom).length
+  const remainingInventory =
+    INVENTORY.length - wardDrugs.filter((d) => !d.custom).length
 
   // escape to close
   useEffect(() => {
@@ -1146,7 +893,12 @@ function WardDrawer({
   return (
     <AnimatePresence>
       {open && (
-        <div className="no-print fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label="Ward drug list manager">
+        <div
+          className="no-print fixed inset-0 z-50 flex items-end justify-center sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Ward drug list manager"
+        >
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -1162,12 +914,10 @@ function WardDrawer({
             transition={{ type: 'spring', damping: 30, stiffness: 320 }}
             className="relative z-10 flex max-h-[88vh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:max-w-lg sm:rounded-2xl"
           >
-            {/* drag handle */}
             <div className="flex justify-center pt-2 sm:hidden">
               <div className="h-1.5 w-10 rounded-full bg-slate-300" />
             </div>
 
-            {/* header */}
             <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
               <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
                 <ListPlus className="h-5 w-5" />
@@ -1175,7 +925,8 @@ function WardDrawer({
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-bold text-slate-800">Ward Drug List</h3>
                 <p className="text-[11px] text-slate-400">
-                  {wardDrugs.length} drug{wardDrugs.length === 1 ? '' : 's'} · {INVENTORY.length} in hospital inventory
+                  {wardDrugs.length} drug{wardDrugs.length === 1 ? '' : 's'} ·{' '}
+                  {INVENTORY.length} in hospital inventory
                 </p>
               </div>
               <button
@@ -1187,7 +938,6 @@ function WardDrawer({
               </button>
             </div>
 
-            {/* body */}
             <div className="flex-1 overflow-y-auto px-4 py-3">
               {/* Section: current ward list */}
               <section className="mb-4">
@@ -1222,7 +972,9 @@ function WardDrawer({
                               {d.name.charAt(0).toUpperCase()}
                             </span>
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-medium text-slate-800">{d.name}</p>
+                              <p className="truncate text-sm font-medium text-slate-800">
+                                {d.name}
+                              </p>
                               <p className="text-[10px] text-slate-400">
                                 {d.custom ? 'Custom drug' : 'Hospital inventory'}
                                 {inUse && ' · in use'}
@@ -1292,7 +1044,9 @@ function WardDrawer({
                           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-[10px] font-bold text-slate-600">
                             {i.name.charAt(0).toUpperCase()}
                           </span>
-                          <span className="flex-1 truncate text-sm text-slate-700">{i.name}</span>
+                          <span className="flex-1 truncate text-sm text-slate-700">
+                            {i.name}
+                          </span>
                           <Plus className="h-4 w-4 text-emerald-600" />
                         </button>
                       </li>
