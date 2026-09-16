@@ -7,7 +7,17 @@ import {
   useEffect,
   useCallback,
 } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
+import {
+  getInventory,
+  getWardDrugs,
+  addWardDrug,
+  deleteWardDrug,
+  getPatients,
+  savePatient,
+  resetPatients,
+} from '@/lib/api'
 import {
   Plus,
   Minus,
@@ -31,14 +41,6 @@ import {
   ChevronUp,
 } from 'lucide-react'
 import { toast } from 'sonner'
-
-/* ----------------------------------------------------------------
-   Helpers
------------------------------------------------------------------ */
-const uid = () =>
-  typeof crypto !== 'undefined' && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`
 
 /* ----------------------------------------------------------------
    Drug form categories — used as icon filters on the ward list
@@ -68,16 +70,17 @@ const CATEGORIES: {
 ]
 
 /* ----------------------------------------------------------------
-   Admin / Hospital Inventory (master list — managed by admin)
-   Each hospital stocks a fixed set of drugs. Read-only for the
-   pharmacist; used as the source pool when building the ward list.
+   Admin / Hospital Inventory — now lives in the database (seeded
+   from prisma/seed.ts). Loaded at runtime via GET /api/inventory.
+   The constant below is only a client-side fallback if the API is
+   unreachable, so the app still works while developing.
 ----------------------------------------------------------------- */
 interface InventoryDrug {
   id: string
   name: string
 }
 
-const INVENTORY: InventoryDrug[] = [
+const FALLBACK_INVENTORY: InventoryDrug[] = [
   'Tegretol 200mg Tab',
   'Phenytoin 250mg amp',
   'Haloperidol 10mg amp',
@@ -117,6 +120,7 @@ interface WardDrug {
   name: string
   custom: boolean // true if not from the admin inventory
   form: DrugForm // tab | fluid | supply — used by the icon filter
+  createdAt?: string
 }
 
 interface PatientDrug {
@@ -128,7 +132,7 @@ interface Patient {
   id: string
   name: string
   drugs: PatientDrug[]
-  createdAt: number
+  createdAt: string
 }
 
 /* ================================================================ */
@@ -136,63 +140,112 @@ interface Patient {
 /* ================================================================ */
 export default function Home() {
   const [phase, setPhase] = useState<'entry' | 'matrix'>('entry')
-
-  // Ward side list (user)
-  const [wardDrugs, setWardDrugs] = useState<WardDrug[]>([])
   const [wardDrawerOpen, setWardDrawerOpen] = useState(false)
 
-  // Patients
-  const [patients, setPatients] = useState<Patient[]>([])
   const [currentName, setCurrentName] = useState('')
   const [currentDrugs, setCurrentDrugs] = useState<PatientDrug[]>([])
 
   const nameRef = useRef<HTMLInputElement>(null)
+  const qc = useQueryClient()
 
-  /* --------------------------- ward list actions --------------------------- */
+  /* --------------------------- data from DB --------------------------- */
+  const inventoryQuery = useQuery({
+    queryKey: ['inventory'],
+    queryFn: getInventory,
+  })
+  const inventory: InventoryDrug[] = inventoryQuery.data?.map((d) => ({
+    id: d.id,
+    name: d.name,
+  })) ?? FALLBACK_INVENTORY
+
+  const wardQuery = useQuery({
+    queryKey: ['wardDrugs'],
+    queryFn: getWardDrugs,
+  })
+  const wardDrugs: WardDrug[] =
+    wardQuery.data?.map((d) => ({
+      ...d,
+      form: d.form as DrugForm,
+    })) ?? []
+
+  const patientsQuery = useQuery({
+    queryKey: ['patients'],
+    queryFn: getPatients,
+  })
+  const patients: Patient[] =
+    patientsQuery.data?.map((p) => ({
+      ...p,
+      createdAt: p.createdAt,
+    })) ?? []
+
+  const patientsLoading = patientsQuery.isLoading
+
+  /* --------------------------- ward list mutations --------------------------- */
   const wardNameSet = useMemo(
     () => new Set(wardDrugs.map((d) => d.name.toLowerCase())),
     [wardDrugs],
   )
 
-  const addToWardFromInventory = useCallback((invId: string) => {
-    const inv = INVENTORY.find((i) => i.id === invId)
-    if (!inv) return
-    setWardDrugs((prev) => {
-      if (prev.some((d) => d.name.toLowerCase() === inv.name.toLowerCase()))
-        return prev
-      return [
-        ...prev,
-        { id: uid(), name: inv.name, custom: false, form: categorizeDrug(inv.name) },
-      ]
-    })
-  }, [])
+  const addWardMutation = useMutation({
+    mutationFn: addWardDrug,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['wardDrugs'] }),
+  })
 
-  const addCustomToWard = useCallback((name: string) => {
-    const n = name.trim()
-    if (!n) return
-    setWardDrugs((prev) => {
-      if (prev.some((d) => d.name.toLowerCase() === n.toLowerCase())) return prev
-      return [...prev, { id: uid(), name: n, custom: true, form: categorizeDrug(n) }]
-    })
-  }, [])
+  const deleteWardMutation = useMutation({
+    mutationFn: deleteWardDrug,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['wardDrugs'] }),
+    onError: (err: Error) =>
+      toast.error(err.message || 'Failed to remove drug'),
+  })
+
+  const addToWardFromInventory = useCallback(
+    (invId: string) => {
+      const inv = inventory.find((i) => i.id === invId)
+      if (!inv) return
+      if (wardNameSet.has(inv.name.toLowerCase())) return
+      addWardMutation.mutate({
+        name: inv.name,
+        custom: false,
+        form: categorizeDrug(inv.name),
+      })
+    },
+    [inventory, wardNameSet, addWardMutation],
+  )
+
+  const addCustomToWard = useCallback(
+    (name: string) => {
+      const n = name.trim()
+      if (!n) return
+      if (wardNameSet.has(n.toLowerCase())) return
+      addWardMutation.mutate({
+        name: n,
+        custom: true,
+        form: categorizeDrug(n),
+      })
+    },
+    [wardNameSet, addWardMutation],
+  )
 
   const addAllInventory = useCallback(() => {
-    setWardDrugs((prev) => {
-      const existing = new Set(prev.map((d) => d.name.toLowerCase()))
-      const toAdd = INVENTORY.filter(
-        (i) => !existing.has(i.name.toLowerCase()),
-      ).map((i) => ({
-          id: uid(),
-          name: i.name,
-          custom: false,
-          form: categorizeDrug(i.name),
-        }))
-      return [...prev, ...toAdd]
+    const existing = new Set(wardDrugs.map((d) => d.name.toLowerCase()))
+    const toAdd = inventory.filter(
+      (i) => !existing.has(i.name.toLowerCase()),
+    )
+    if (toAdd.length === 0) {
+      toast.info('All hospital drugs are already in your ward list')
+      return
+    }
+    toAdd.forEach((i) =>
+      addWardMutation.mutate({
+        name: i.name,
+        custom: false,
+        form: categorizeDrug(i.name),
+      }),
+    )
+    toast.success('Hospital drugs added to ward list', {
+      description: `${toAdd.length} item(s) added.`,
     })
-    toast.success('All hospital drugs added to ward list', {
-      description: `${INVENTORY.length} items available.`,
-    })
-  }, [])
+  }, [inventory, wardDrugs, addWardMutation])
 
   const isWardDrugInUse = useCallback(
     (drugId: string) =>
@@ -209,9 +262,9 @@ export default function Home() {
         })
         return
       }
-      setWardDrugs((prev) => prev.filter((d) => d.id !== drugId))
+      deleteWardMutation.mutate(drugId)
     },
-    [isWardDrugInUse],
+    [isWardDrugInUse, deleteWardMutation],
   )
 
   /* --------------------------- patient column actions --------------------------- */
@@ -243,7 +296,14 @@ export default function Home() {
   }, [])
 
   /* --------------------------- save & next --------------------------- */
-  const saveAndNext = () => {
+  const savePatientMutation = useMutation({
+    mutationFn: savePatient,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['patients'] }),
+  })
+
+  const [saving, setSaving] = useState(false)
+
+  const saveAndNext = async () => {
     if (!currentName.trim()) {
       toast.error('Please enter the patient name', {
         description: 'Tap the name field at the top.',
@@ -261,35 +321,45 @@ export default function Home() {
       toast.error(`Ward limit reached (${MAX_PATIENTS} patients)`)
       return
     }
-    const patient: Patient = {
-      id: uid(),
-      name: currentName.trim(),
-      drugs: currentDrugs,
-      createdAt: Date.now(),
+    setSaving(true)
+    try {
+      await savePatientMutation.mutateAsync({
+        name: currentName.trim(),
+        drugs: currentDrugs,
+      })
+      setCurrentName('')
+      setCurrentDrugs([])
+      toast.success(`Patient ${patients.length + 1} saved`, {
+        description: `${currentDrugs.length} drug(s) recorded — column cleared.`,
+      })
+      setTimeout(() => nameRef.current?.focus(), 50)
+    } catch (e) {
+      toast.error('Failed to save patient', {
+        description: (e as Error).message,
+      })
+    } finally {
+      setSaving(false)
     }
-    setPatients((prev) => [...prev, patient])
-    setCurrentName('')
-    setCurrentDrugs([])
-    toast.success(`Patient ${patients.length + 1} saved`, {
-      description: `${patient.drugs.length} drug(s) recorded — column cleared.`,
-    })
-    setTimeout(() => nameRef.current?.focus(), 50)
   }
 
   /* --------------------------- finish round --------------------------- */
-  const finishRound = () => {
+  const finishRound = async () => {
     let savedCount = patients.length
     if (currentName.trim() && currentDrugs.length > 0) {
-      const patient: Patient = {
-        id: uid(),
-        name: currentName.trim(),
-        drugs: currentDrugs,
-        createdAt: Date.now(),
+      try {
+        await savePatientMutation.mutateAsync({
+          name: currentName.trim(),
+          drugs: currentDrugs,
+        })
+        setCurrentName('')
+        setCurrentDrugs([])
+        savedCount += 1
+      } catch (e) {
+        toast.error('Failed to save patient', {
+          description: (e as Error).message,
+        })
+        return
       }
-      setPatients((prev) => [...prev, patient])
-      setCurrentName('')
-      setCurrentDrugs([])
-      savedCount += 1
     }
     if (savedCount === 0) {
       toast.error('No patients recorded yet', {
@@ -308,12 +378,23 @@ export default function Home() {
     setTimeout(() => nameRef.current?.focus(), 120)
   }
 
-  const resetAll = () => {
-    setPatients([])
-    setCurrentName('')
-    setCurrentDrugs([])
-    setPhase('entry')
-    toast.success('All records cleared')
+  const resetMutation = useMutation({
+    mutationFn: resetPatients,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['patients'] }),
+  })
+
+  const resetAll = async () => {
+    try {
+      await resetMutation.mutateAsync()
+      setCurrentName('')
+      setCurrentDrugs([])
+      setPhase('entry')
+      toast.success('All records cleared')
+    } catch (e) {
+      toast.error('Failed to clear records', {
+        description: (e as Error).message,
+      })
+    }
   }
 
   const handlePrint = () => window.print()
@@ -427,6 +508,7 @@ export default function Home() {
             nameRef={nameRef}
             savedPatients={patients}
             wardDrugs={wardDrugs}
+            inventoryCount={inventory.length}
             onOpenWardDrawer={() => setWardDrawerOpen(true)}
             onAddAllInventory={addAllInventory}
             onReset={resetAll}
@@ -459,10 +541,11 @@ export default function Home() {
             </button>
             <button
               onClick={saveAndNext}
-              className="flex flex-[2] items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3.5 text-sm font-bold text-white shadow-md shadow-emerald-600/30 transition hover:bg-emerald-700 active:scale-[0.98] sm:flex-1"
+              disabled={saving}
+              className="flex flex-[2] items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3.5 text-sm font-bold text-white shadow-md shadow-emerald-600/30 transition hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 sm:flex-1"
             >
               <UserPlus className="h-4 w-4" />
-              Save &amp; Next Patient
+              {saving ? 'Saving…' : 'Save & Next Patient'}
             </button>
           </div>
         </footer>
@@ -473,6 +556,7 @@ export default function Home() {
         open={wardDrawerOpen}
         onClose={() => setWardDrawerOpen(false)}
         wardDrugs={wardDrugs}
+        inventory={inventory}
         onAddFromInventory={addToWardFromInventory}
         onAddCustom={addCustomToWard}
         onAddAllInventory={addAllInventory}
@@ -499,6 +583,7 @@ interface EntryViewProps {
   nameRef: React.RefObject<HTMLInputElement | null>
   savedPatients: Patient[]
   wardDrugs: WardDrug[]
+  inventoryCount: number
   onOpenWardDrawer: () => void
   onAddAllInventory: () => void
   onReset: () => void
@@ -516,6 +601,7 @@ function EntryView(props: EntryViewProps) {
     nameRef,
     savedPatients,
     wardDrugs,
+    inventoryCount,
     onOpenWardDrawer,
     onAddAllInventory,
     onReset,
@@ -662,7 +748,7 @@ function EntryView(props: EntryViewProps) {
                       className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
                     >
                       <Package className="h-3.5 w-3.5" />
-                      Add all {INVENTORY.length} hospital drugs
+                      Add all {inventoryCount} hospital drugs
                     </button>
                     <button
                       onClick={onOpenWardDrawer}
@@ -937,6 +1023,7 @@ interface WardDrawerProps {
   open: boolean
   onClose: () => void
   wardDrugs: WardDrug[]
+  inventory: InventoryDrug[]
   onAddFromInventory: (invId: string) => void
   onAddCustom: (name: string) => void
   onAddAllInventory: () => void
@@ -949,6 +1036,7 @@ function WardDrawer({
   open,
   onClose,
   wardDrugs,
+  inventory,
   onAddFromInventory,
   onAddCustom,
   onAddAllInventory,
@@ -962,16 +1050,16 @@ function WardDrawer({
   // inventory items not yet in the ward list, filtered by search
   const addableInventory = useMemo(() => {
     const q = invQuery.trim().toLowerCase()
-    return INVENTORY.filter((i) => {
+    return inventory.filter((i) => {
       const inWard = wardNameSet.has(i.name.toLowerCase())
       if (inWard) return false
       if (!q) return true
       return i.name.toLowerCase().includes(q)
     })
-  }, [invQuery, wardNameSet])
+  }, [invQuery, wardNameSet, inventory])
 
   const remainingInventory =
-    INVENTORY.length - wardDrugs.filter((d) => !d.custom).length
+    inventory.length - wardDrugs.filter((d) => !d.custom).length
 
   // escape to close
   useEffect(() => {
@@ -1019,7 +1107,7 @@ function WardDrawer({
                 <h3 className="text-sm font-bold text-slate-800">Ward Drug List</h3>
                 <p className="text-[11px] text-slate-400">
                   {wardDrugs.length} drug{wardDrugs.length === 1 ? '' : 's'} ·{' '}
-                  {INVENTORY.length} in hospital inventory
+                  {inventory.length} in hospital inventory
                 </p>
               </div>
               <button

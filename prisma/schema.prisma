@@ -1,9 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,20 +10,51 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
+/* ------------------------------------------------------------------
+   PharmRound — Clinical Ward Round Pharmacy
+
+   Inventory  : admin-managed hospital drug catalogue (read-only
+                source pool the pharmacist draws ward items from)
+   WardDrug  : user-curated list of drugs for a specific ward
+   Patient    : a patient recorded during a ward round
+   PatientDrug: a prescribed drug (qty) attached to a patient
+------------------------------------------------------------------- */
+
+model Inventory {
   id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
+  name      String   @unique
+  form      String // "tab" | "fluid" | "supply"
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
-model Post {
+model WardDrug {
   id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
+  name      String
+  custom    Boolean  @default(false) // true = not from inventory
+  form      String // "tab" | "fluid" | "supply"
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  drugs     PatientDrug[]
+
+  @@index([name])
+}
+
+model Patient {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  drugs     PatientDrug[]
+}
+
+model PatientDrug {
+  id        String @id @default(cuid())
+  patientId String
+  drugId    String
+  quantity  Int
+
+  patient    Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  wardDrug   WardDrug  @relation(fields: [drugId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, drugId])
+  @@index([patientId])
+  @@index([drugId])
 }
