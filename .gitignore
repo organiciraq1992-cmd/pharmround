@@ -32,9 +32,13 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
+
+# supabase local temp (project ref, not for committing)
+supabase/.temp/
 
 
 # typescript
@@ -52,3 +56,7 @@ prompt
 server.log
 # Skills directory
 .supabase_pw
+
+# local sqlite dev db (Supabase is used in production)
+db/*.db
+db/*.db-journal
