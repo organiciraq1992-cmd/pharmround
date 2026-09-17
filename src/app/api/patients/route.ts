@@ -4,12 +4,37 @@ import { supabase } from '@/lib/supabase'
 // GET /api/patients — all saved patients with their drugs
 export async function GET() {
   try {
-    const { data: patients, error } = await supabase
+    // fetch patients and drugs separately (PostgREST schema cache may not
+    // expose the FK for the nested `drugs(...)` select right after db push)
+    const { data: patients, error: pErr } = await supabase
       .from('Patient')
-      .select('id, name, createdAt, drugs(id, patientId, drugId, quantity)')
+      .select('id, name, createdAt')
       .order('createdAt')
-    if (error) throw error
-    return NextResponse.json(patients || [])
+    if (pErr) throw pErr
+
+    if (!patients || patients.length === 0) {
+      return NextResponse.json([])
+    }
+
+    const patientIds = patients.map((p) => p.id)
+    const { data: drugs, error: dErr } = await supabase
+      .from('PatientDrug')
+      .select('id, patientId, drugId, quantity')
+      .in('patientId', patientIds)
+    if (dErr) throw dErr
+
+    // attach drugs to each patient
+    const drugsByPatient = new Map<string, typeof drugs>()
+    for (const d of drugs || []) {
+      const arr = drugsByPatient.get(d.patientId) || []
+      arr.push(d)
+      drugsByPatient.set(d.patientId, arr)
+    }
+    const result = patients.map((p) => ({
+      ...p,
+      drugs: drugsByPatient.get(p.id) || [],
+    }))
+    return NextResponse.json(result)
   } catch (e) {
     return NextResponse.json(
       { error: 'Failed to load patients' },
