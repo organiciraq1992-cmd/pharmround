@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { supabase } from '@/lib/supabase'
 
 // DELETE /api/ward-drugs/[id] — remove a drug from the ward list
 export async function DELETE(
@@ -9,14 +9,18 @@ export async function DELETE(
   try {
     const { id } = await params
     // guard: refuse if any patient is using this drug
-    const inUse = await db.patientDrug.findFirst({ where: { drugId: id } })
-    if (inUse) {
+    const { count } = await supabase
+      .from('PatientDrug')
+      .select('id', { count: 'exact', head: true })
+      .eq('drugId', id)
+    if (count && count > 0) {
       return NextResponse.json(
         { error: 'Cannot remove — drug is prescribed to a patient.' },
         { status: 409 },
       )
     }
-    await db.wardDrug.delete({ where: { id } })
+    const { error } = await supabase.from('WardDrug').delete().eq('id', id)
+    if (error) throw error
     return NextResponse.json({ ok: true })
   } catch (e) {
     return NextResponse.json(

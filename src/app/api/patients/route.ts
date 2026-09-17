@@ -1,16 +1,15 @@
 import { NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { supabase } from '@/lib/supabase'
 
 // GET /api/patients — all saved patients with their drugs
 export async function GET() {
   try {
-    const patients = await db.patient.findMany({
-      orderBy: { createdAt: 'asc' },
-      include: {
-        drugs: true,
-      },
-    })
-    return NextResponse.json(patients)
+    const { data: patients, error } = await supabase
+      .from('Patient')
+      .select('id, name, createdAt, drugs(id, patientId, drugId, quantity)')
+      .order('createdAt')
+    if (error) throw error
+    return NextResponse.json(patients || [])
   } catch (e) {
     return NextResponse.json(
       { error: 'Failed to load patients' },
@@ -20,7 +19,6 @@ export async function GET() {
 }
 
 // POST /api/patients — save a patient (with their drugs)
-//   body: { name, drugs: [{ drugId, quantity }] }
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -41,14 +39,33 @@ export async function POST(req: Request) {
         quantity: d.quantity,
       }))
 
-    const patient = await db.patient.create({
-      data: {
-        name,
-        drugs: { create: drugs },
-      },
-      include: { drugs: true },
-    })
-    return NextResponse.json(patient, { status: 201 })
+    // insert patient
+    const patientId = crypto.randomUUID()
+    const { data: patient, error: pErr } = await supabase
+      .from('Patient')
+      .insert({ id: patientId, name })
+      .select('id, name, createdAt')
+      .single()
+    if (pErr) throw pErr
+
+    // insert drugs if any
+    if (drugs.length > 0) {
+      const rows = drugs.map((d: { drugId: string; quantity: number }) => ({
+        id: crypto.randomUUID(),
+        patientId,
+        drugId: d.drugId,
+        quantity: d.quantity,
+      }))
+      const { error: dErr } = await supabase
+        .from('PatientDrug')
+        .insert(rows)
+      if (dErr) throw dErr
+    }
+
+    return NextResponse.json(
+      { ...patient, drugs },
+      { status: 201 },
+    )
   } catch (e) {
     return NextResponse.json(
       { error: 'Failed to save patient' },
